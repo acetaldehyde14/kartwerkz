@@ -1,0 +1,158 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  NODE_VERSION: "20.18.0"
+  PNPM_VERSION: "9.15.4"
+
+jobs:
+  lint-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kartwerkz
+          POSTGRES_PASSWORD: kartwerkz_ci
+          POSTGRES_DB: kartwerkz_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kartwerkz"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://kartwerkz:kartwerkz_ci@localhost:5432/kartwerkz_test?schema=public
+      REDIS_URL: redis://localhost:6379
+      SESSION_SECRET: ci-test-session-secret
+      CORS_ORIGIN: http://localhost:3000
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @kartwerkz/api prisma:generate
+      - run: pnpm --filter @kartwerkz/api prisma:deploy
+      - run: pnpm test -- --ci
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint-typecheck, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @kartwerkz/api prisma:generate
+      - run: pnpm build
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.event_name == 'pull_request'
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kartwerkz
+          POSTGRES_PASSWORD: kartwerkz_ci
+          POSTGRES_DB: kartwerkz_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kartwerkz"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://kartwerkz:kartwerkz_ci@localhost:5432/kartwerkz_e2e?schema=public
+      REDIS_URL: redis://localhost:6379
+      SESSION_SECRET: ci-e2e-session-secret
+      CORS_ORIGIN: http://localhost:3000
+      NEXT_PUBLIC_API_URL: http://localhost:4000/api/v1
+      NODE_ENV: development
+      # Deliberately unset STRIPE_SECRET_KEY: the e2e suite exercises the dev
+      # payment adapter's /checkout/dev-confirm stand-in, never real Stripe.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @kartwerkz/shared build
+      - run: pnpm --filter @kartwerkz/api prisma:generate
+      - run: pnpm --filter @kartwerkz/api prisma:deploy
+      - run: pnpm --filter @kartwerkz/api prisma:seed
+      - run: pnpm --filter @kartwerkz/storefront exec playwright install --with-deps chromium
+
+      - name: Start API in background
+        run: pnpm --filter @kartwerkz/api dev &
+      - name: Start storefront in background
+        run: pnpm --filter @kartwerkz/storefront dev &
+      - name: Wait for API and storefront to be ready
+        run: |
+          npx wait-on -t 120000 http://localhost:4000/api/v1/health http://localhost:3000
+
+      - run: pnpm --filter @kartwerkz/storefront test:e2e
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/storefront/playwright-report/
+          retention-days: 14

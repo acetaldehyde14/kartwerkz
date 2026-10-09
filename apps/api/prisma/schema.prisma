@@ -1,0 +1,667 @@
+// Kartwerkz database schema.
+// Monetary values are stored as integer minor units (e.g. cents) with an
+// explicit ISO 4217 currency code — never as floating point.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Identity & accounts
+// ---------------------------------------------------------------------------
+
+enum UserRole {
+  CUSTOMER
+  ADMIN
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  passwordHash  String
+  role          UserRole  @default(CUSTOMER)
+  emailVerified Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  profile              CustomerProfile?
+  addresses            Address[]
+  sessions             Session[]
+  emailVerifyTokens    EmailVerificationToken[]
+  passwordResetTokens  PasswordResetToken[]
+  savedConfigurations  SavedConfiguration[]
+  uploadedAssets       UploadedAsset[]
+  carts                Cart[]
+  orders               Order[]
+  artworkApprovals     ArtworkApproval[]
+  auditLogs            AuditLog[]
+
+  @@index([email])
+}
+
+model CustomerProfile {
+  id          String   @id @default(uuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  firstName   String?
+  lastName    String?
+  phone       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Address {
+  id          String   @id @default(uuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fullName    String
+  line1       String
+  line2       String?
+  city        String
+  state       String?
+  postalCode  String
+  country     String
+  phone       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  shipmentsAsDestination Shipment[]
+  orders                 Order[] @relation("ShippingAddress")
+
+  @@index([userId])
+}
+
+// Server-managed session backing an HttpOnly cookie. The cookie stores only
+// the opaque `id`; `tokenHash` lets us detect/revoke without storing secrets.
+model Session {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String   @unique
+  userAgent  String?
+  ipAddress  String?
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+}
+
+model EmailVerificationToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// A persistent anonymous identity so guests can save configurations / carts
+// before creating an account. The id is stored in a long-lived HttpOnly
+// cookie and is the ownership key checked on every guest-scoped request.
+model GuestSession {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  savedConfigurations SavedConfiguration[]
+  uploadedAssets      UploadedAsset[]
+  carts               Cart[]
+  orders              Order[]
+}
+
+// ---------------------------------------------------------------------------
+// Catalog
+// ---------------------------------------------------------------------------
+
+model Product {
+  id          String   @id @default(uuid())
+  slug        String   @unique
+  name        String
+  description String
+  basePriceMinorUnits Int
+  currency    String   @default("SGD")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  kartModels       ProductKartModel[]
+  cartItems        CartItem[]
+  orderItems       OrderItem[]
+  pricingRules     PricingRule[]
+}
+
+model KartManufacturer {
+  id        String   @id @default(uuid())
+  slug      String   @unique
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  models KartModel[]
+}
+
+model KartModel {
+  id              String   @id @default(uuid())
+  manufacturerId  String
+  manufacturer    KartManufacturer @relation(fields: [manufacturerId], references: [id], onDelete: Cascade)
+  slug            String
+  name            String
+  modelYear       Int?
+  // Path (relative to the public model asset bucket) to the demo/production
+  // GLB. See docs/configurator.md for the asset pipeline contract.
+  glbAssetPath    String
+  // Named bodywork regions this model exposes for material/texture overrides,
+  // e.g. ["front_fairing", "nassau_panel", "left_sidepod", "right_sidepod", "rear_bumper"].
+  bodyworkRegions Json
+  isDemo          Boolean  @default(true)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  products             ProductKartModel[]
+  graphicsDesigns      GraphicsDesignKartModel[]
+  savedConfigurations  SavedConfiguration[]
+
+  @@unique([manufacturerId, slug])
+  @@index([manufacturerId])
+}
+
+model ProductKartModel {
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  kartModelId String
+  kartModel   KartModel @relation(fields: [kartModelId], references: [id], onDelete: Cascade)
+
+  @@id([productId, kartModelId])
+}
+
+enum GraphicsDesignTier {
+  PREMADE
+  SEMI_CUSTOM
+  FULL_CUSTOM
+}
+
+model GraphicsDesign {
+  id              String   @id @default(uuid())
+  slug            String   @unique
+  name            String
+  description     String
+  tier            GraphicsDesignTier @default(PREMADE)
+  thumbnailUrl    String
+  // Default colour slots a customer can start from / override.
+  defaultColours  Json
+  priceAdjustmentMinorUnits Int @default(0)
+  isDemo          Boolean  @default(true)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  compatibleKartModels GraphicsDesignKartModel[]
+  assets               GraphicsAsset[]
+  savedConfigurations  SavedConfiguration[]
+}
+
+model GraphicsDesignKartModel {
+  graphicsDesignId String
+  graphicsDesign   GraphicsDesign @relation(fields: [graphicsDesignId], references: [id], onDelete: Cascade)
+  kartModelId      String
+  kartModel        KartModel      @relation(fields: [kartModelId], references: [id], onDelete: Cascade)
+
+  @@id([graphicsDesignId, kartModelId])
+}
+
+// Preview/production texture assets for a design, scoped per bodywork region
+// so the configurator can map region -> texture without hardcoding paths.
+model GraphicsAsset {
+  id               String   @id @default(uuid())
+  graphicsDesignId String
+  graphicsDesign   GraphicsDesign @relation(fields: [graphicsDesignId], references: [id], onDelete: Cascade)
+  bodyworkRegion   String
+  previewTextureUrl String
+  createdAt        DateTime @default(now())
+
+  @@index([graphicsDesignId])
+}
+
+enum MaterialFinish {
+  GLOSS
+  MATTE
+  CHROME
+  HOLOGRAPHIC
+}
+
+// Admin-configurable pricing components. Kept generic (type + scope key) so
+// new fee types (finish surcharge, design tier fee, rush fee, ...) don't
+// require schema changes — see docs/architecture.md#pricing-engine.
+enum PricingRuleType {
+  BASE_PRICE_OVERRIDE
+  FINISH_SURCHARGE
+  DESIGN_TIER_FEE
+  SHIPPING_FLAT
+}
+
+model PricingRule {
+  id             String   @id @default(uuid())
+  productId      String
+  product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  type           PricingRuleType
+  // Matches a MaterialFinish, GraphicsDesignTier, or country code depending
+  // on `type`. Null means "applies to all".
+  scopeKey       String?
+  amountMinorUnits Int
+  currency       String  @default("SGD")
+  isActive       Boolean @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([productId, type])
+}
+
+// ---------------------------------------------------------------------------
+// Uploads
+// ---------------------------------------------------------------------------
+
+enum UploadStatus {
+  PENDING_SCAN
+  CLEAN
+  QUARANTINED
+  REJECTED
+}
+
+model UploadedAsset {
+  id              String   @id @default(uuid())
+  userId          String?
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  guestSessionId  String?
+  guestSession    GuestSession? @relation(fields: [guestSessionId], references: [id], onDelete: SetNull)
+  originalFilename String
+  objectKey       String   @unique
+  mimeType        String
+  sizeBytes       Int
+  status          UploadStatus @default(PENDING_SCAN)
+  // Whether this format can be rendered directly in the live preview
+  // (PNG/JPEG/SVG-rasterized) vs. flagged for manual artwork prep (PDF/AI/EPS).
+  previewRenderable Boolean @default(false)
+  createdAt       DateTime @default(now())
+
+  logoPlacements   LogoPlacement[]
+  artworkRevisions ArtworkRevision[]
+
+  @@index([userId])
+  @@index([guestSessionId])
+}
+
+// ---------------------------------------------------------------------------
+// Configurator
+// ---------------------------------------------------------------------------
+
+// Position/scale/rotation of an uploaded logo within a bodywork region's
+// defined printable area. Enforced server-side against the region's bounds.
+model LogoPlacement {
+  id              String   @id @default(uuid())
+  savedConfigurationId String
+  savedConfiguration   SavedConfiguration @relation(fields: [savedConfigurationId], references: [id], onDelete: Cascade)
+  uploadedAssetId String
+  uploadedAsset   UploadedAsset @relation(fields: [uploadedAssetId], references: [id])
+  bodyworkRegion  String
+  // Normalized [0,1] coordinates within the region's printable area.
+  x               Float
+  y               Float
+  scale           Float @default(1)
+  rotationDegrees Float @default(0)
+  createdAt       DateTime @default(now())
+
+  @@index([savedConfigurationId])
+}
+
+// A customer's in-progress or saved kit configuration. Versioned so the
+// configuration JSON shape can evolve without breaking old saves/orders.
+model SavedConfiguration {
+  id              String   @id @default(uuid())
+  schemaVersion   Int      @default(1)
+  userId          String?
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  guestSessionId  String?
+  guestSession    GuestSession? @relation(fields: [guestSessionId], references: [id], onDelete: SetNull)
+  kartModelId     String
+  kartModel       KartModel @relation(fields: [kartModelId], references: [id])
+  graphicsDesignId String
+  graphicsDesign  GraphicsDesign @relation(fields: [graphicsDesignId], references: [id])
+  primaryColour   String
+  secondaryColour String
+  accentColour    String
+  driverName      String?
+  raceNumber      String?
+  countryCode     String?
+  finish          MaterialFinish @default(GLOSS)
+  specialInstructions String?
+  name            String?  // customer-facing label, e.g. "My race livery"
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  logoPlacements  LogoPlacement[]
+  cartItems       CartItem[]
+
+  @@index([userId])
+  @@index([guestSessionId])
+}
+
+// ---------------------------------------------------------------------------
+// Cart
+// ---------------------------------------------------------------------------
+
+model Cart {
+  id             String   @id @default(uuid())
+  userId         String?
+  user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  guestSessionId String?
+  guestSession   GuestSession? @relation(fields: [guestSessionId], references: [id], onDelete: SetNull)
+  currency       String   @default("SGD")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  items CartItem[]
+
+  @@index([userId])
+  @@index([guestSessionId])
+}
+
+model CartItem {
+  id                   String   @id @default(uuid())
+  cartId               String
+  cart                 Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  productId            String
+  product              Product  @relation(fields: [productId], references: [id])
+  savedConfigurationId String
+  savedConfiguration   SavedConfiguration @relation(fields: [savedConfigurationId], references: [id])
+  quantity             Int      @default(1)
+  // Server-computed price snapshot at time of add — recomputed/validated at
+  // checkout, never trusted from the client directly.
+  unitPriceMinorUnits  Int
+  currency             String   @default("SGD")
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([cartId])
+}
+
+// ---------------------------------------------------------------------------
+// Orders
+// ---------------------------------------------------------------------------
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  ARTWORK_IN_PROGRESS
+  PROOF_READY
+  AWAITING_APPROVAL
+  REVISION_REQUESTED
+  APPROVED
+  SENT_TO_SUPPLIER
+  IN_PRODUCTION
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+model Order {
+  id              String   @id @default(uuid())
+  orderNumber     String   @unique
+  userId          String?
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  guestSessionId  String?
+  guestSession    GuestSession? @relation(fields: [guestSessionId], references: [id], onDelete: SetNull)
+  // Verified contact for guest orders — required for guest proof approval.
+  contactEmail    String
+  shippingAddressId String?
+  shippingAddress Address? @relation("ShippingAddress", fields: [shippingAddressId], references: [id])
+  status          OrderStatus @default(PENDING_PAYMENT)
+  paymentStatus   PaymentStatus @default(PENDING)
+  subtotalMinorUnits Int
+  shippingMinorUnits Int @default(0)
+  totalMinorUnits    Int
+  currency        String   @default("SGD")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  items           OrderItem[]
+  statusEvents    OrderStatusEvent[]
+  payments        Payment[]
+  artworkProofs   ArtworkProof[]
+  supplierOrder   SupplierOrder?
+  shipment        Shipment?
+
+  @@index([userId])
+  @@index([guestSessionId])
+  @@index([status])
+}
+
+// Immutable snapshot of a configured kit as purchased. Later changes to the
+// Product/GraphicsDesign/KartModel must never alter what was actually sold.
+model OrderItem {
+  id              String   @id @default(uuid())
+  orderId         String
+  order           Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product  @relation(fields: [productId], references: [id])
+  quantity        Int      @default(1)
+  unitPriceMinorUnits Int
+  totalPriceMinorUnits Int
+  currency        String   @default("SGD")
+  // Full frozen configuration JSON (kart model, design, colours, driver,
+  // finish, logo placements) at time of purchase.
+  configurationSnapshot Json
+  createdAt       DateTime @default(now())
+
+  @@index([orderId])
+}
+
+model OrderStatusEvent {
+  id          String   @id @default(uuid())
+  orderId     String
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  fromStatus  OrderStatus?
+  toStatus    OrderStatus
+  note        String?
+  // "customer:<id>", "admin:<id>", "system", or "webhook:stripe"
+  actor       String
+  createdAt   DateTime @default(now())
+
+  @@index([orderId])
+}
+
+model Payment {
+  id                String   @id @default(uuid())
+  orderId           String
+  order             Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  provider          String   @default("stripe")
+  providerSessionId String?  @unique
+  providerIntentId  String?  @unique
+  status            PaymentStatus @default(PENDING)
+  amountMinorUnits  Int
+  currency          String   @default("SGD")
+  // Stripe event ids already processed, for idempotent webhook handling.
+  processedEventIds String[] @default([])
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([orderId])
+}
+
+// ---------------------------------------------------------------------------
+// Artwork proofing & approval
+// ---------------------------------------------------------------------------
+
+model ArtworkProof {
+  id          String   @id @default(uuid())
+  orderId     String
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  revisions   ArtworkRevision[]
+
+  @@index([orderId])
+}
+
+model ArtworkRevision {
+  id              String   @id @default(uuid())
+  artworkProofId  String
+  artworkProof    ArtworkProof @relation(fields: [artworkProofId], references: [id], onDelete: Cascade)
+  revisionNumber  Int
+  fileObjectKey   String
+  previewImageUrl String?
+  notes           String?
+  // Null until an admin explicitly sends it to the customer.
+  sentToCustomerAt DateTime?
+  createdAt       DateTime @default(now())
+
+  approvals       ArtworkApproval[]
+  uploadedAssetId String?
+  uploadedAsset   UploadedAsset? @relation(fields: [uploadedAssetId], references: [id])
+
+  @@unique([artworkProofId, revisionNumber])
+  @@index([artworkProofId])
+}
+
+enum ArtworkApprovalStatus {
+  APPROVED
+  REVISION_REQUESTED
+}
+
+// Approval is scoped to the exact revision. A new revision supersedes any
+// prior approval for production-eligibility purposes — see
+// OrderService.isRevisionApprovedForProduction().
+model ArtworkApproval {
+  id                 String   @id @default(uuid())
+  artworkRevisionId  String
+  artworkRevision    ArtworkRevision @relation(fields: [artworkRevisionId], references: [id], onDelete: Cascade)
+  userId             String?
+  user               User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  // For guest orders: the verified contact email approving, captured for audit.
+  guestContactEmail  String?
+  status             ArtworkApprovalStatus
+  comment            String?
+  createdAt          DateTime @default(now())
+
+  @@index([artworkRevisionId])
+}
+
+// ---------------------------------------------------------------------------
+// Supplier fulfillment
+// ---------------------------------------------------------------------------
+
+enum SupplierIntegrationMethod {
+  MANUAL
+  EMAIL
+  API
+  WEBHOOK
+  PORTAL
+}
+
+model Supplier {
+  id                 String   @id @default(uuid())
+  name               String
+  contactEmail       String?
+  integrationMethod  SupplierIntegrationMethod @default(MANUAL)
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  supplierOrders SupplierOrder[]
+}
+
+enum SupplierOrderStatus {
+  PENDING
+  SUBMITTED
+  IN_PRODUCTION
+  COMPLETED
+  CANCELLED
+}
+
+// Record of the production package handed to the supplier. Only created once
+// the linked order's artwork revision has an APPROVED ArtworkApproval.
+model SupplierOrder {
+  id                 String   @id @default(uuid())
+  orderId            String   @unique
+  order              Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  supplierId         String
+  supplier           Supplier @relation(fields: [supplierId], references: [id])
+  status             SupplierOrderStatus @default(PENDING)
+  approvedArtworkRevisionId String
+  productionPackageObjectKey String?
+  submittedAt        DateTime?
+  manufacturingNotes String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([supplierId])
+}
+
+enum ShipmentStatus {
+  PENDING
+  SHIPPED
+  IN_TRANSIT
+  DELIVERED
+  RETURNED
+}
+
+model Shipment {
+  id              String   @id @default(uuid())
+  orderId         String   @unique
+  order           Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  destinationAddressId String?
+  destinationAddress   Address? @relation(fields: [destinationAddressId], references: [id])
+  carrier         String?
+  trackingNumber  String?
+  trackingUrl     String?
+  status          ShipmentStatus @default(PENDING)
+  shippedAt       DateTime?
+  deliveredAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Audit
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorUserId String?
+  actorUser   User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  action      String
+  entityType  String
+  entityId    String
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorUserId])
+}

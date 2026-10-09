@@ -1,0 +1,36 @@
+/* Relative import (not the package's "exports" subpath) because this
+   workspace package ships TS/CSS source directly, with no build step —
+   resolving via node_modules "exports" for a raw .css file is flaky
+   across bundlers, so we point straight at the source file instead. */
+@import '../../../../packages/ui/src/styles/tokens.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-surface-border;
+  }
+
+  html {
+    @apply scroll-smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground font-body antialiased;
+  }
+
+  /* Respect reduced-motion preferences globally; Framer Motion components
+     should also check this via useReducedMotion() for JS-driven transitions. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
