@@ -3,14 +3,16 @@
 ## Current state: honest disclosure
 
 The homepage animation and `/configurator` render a real, textured GLB
-(`apps/storefront/public/models/kartwerkz-blue-red.glb`) via the
-`KartViewer` package in `apps/storefront/src/components/kart/`. This is a
-**photo-derived approximation of a generic kart chassis, not manufacturer
-CAD and not a specific real manufacturer's kart** — the viewer's own
-upstream README states this explicitly. Do not present it to customers as
-representing a specific real manufacturer's product. It is a materially
-better asset than the procedural primitive rig used earlier in this
-project's history, but the same disclosure obligation applies.
+(`apps/storefront/public/models/kartwerkz-blue-red.glb`, revision 2 of the
+upstream kit — a visual refresh of bumper/sidepod/fairing/seat/engine
+geometry, ~106k triangles, ~5.1MB) via the `KartViewer` package in
+`apps/storefront/src/components/kart/`. This is a **photo-derived
+approximation of a generic kart chassis, not manufacturer CAD and not a
+specific real manufacturer's kart** — the viewer's own upstream README
+states this explicitly. Do not present it to customers as representing a
+specific real manufacturer's product. It is a materially better asset than
+the procedural primitive rig used earlier in this project's history, but
+the same disclosure obligation applies.
 
 ## How appearance is driven
 

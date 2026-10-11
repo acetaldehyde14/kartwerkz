@@ -36,7 +36,7 @@ export interface KartViewerProps {
 }
 const POSITIONS: Record<ViewPreset, [number, number, number]> = {
   perspective: [2.1, 1.95, 2.7],
-  top: [0, 3.8, 0.035],
+  top: [0, 4.45, 0.035],
   front: [0, 1.05, 3.65],
   side: [3.65, 1.1, 0],
   rear: [0, 1.2, -3.65],

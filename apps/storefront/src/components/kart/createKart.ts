@@ -1,5 +1,5 @@
 import * as T from 'three';
-import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
 /** Metres; +X right, +Y up, +Z nose. Photo-derived proportions, not CAD. */
 export const PANEL_NAMES = [
@@ -60,106 +60,114 @@ function sweep(nu: number, nv: number, fn: (u: number, a: number) => V3) {
   return g;
 }
 
+const smoothstep = (a: number, b: number, x: number) => {
+  const t = T.MathUtils.clamp((x - a) / (b - a), 0, 1);
+  return t * t * (3 - 2 * t);
+};
+const signedPow = (x: number, p: number) => Math.sign(x) * Math.pow(Math.abs(x), p);
+
+// Broad centre and upswept wings with a moulded, flatter base.
 function frontBumper() {
-  return sweep(100, 32, (u, a) => {
-    const x = (u * 2 - 1) * 0.705,
-      edge = Math.pow(Math.abs(x) / 0.705, 2.5);
-    // Ends sweep rearward and rise. Broad, moulded crescent rather than a tube.
-    const z = 0.918 - 0.265 * edge;
-    const y = 0.164 + 0.067 * edge;
-    const halfDepth = 0.128 - 0.067 * Math.pow(edge, 1.5);
-    const halfHeight = 0.078 + 0.01 * edge;
-    return [x, y - halfHeight * Math.cos(a), z - halfDepth * Math.sin(a)];
+  return sweep(112, 40, (u, a) => {
+    const x = (u * 2 - 1) * 0.7,
+      edge = Math.abs(x) / 0.7;
+    const trough = Math.exp(-Math.pow((edge - 0.64) / 0.22, 2));
+    const top = 0.242 - 0.067 * trough + 0.025 * Math.pow(edge, 6);
+    const bottom = 0.052 + 0.016 * edge;
+    const z = 0.892 - 0.28 * Math.pow(edge, 2.35);
+    const depth = 0.18 - 0.088 * Math.pow(edge, 1.7);
+    const roundEnd = 1 - 0.94 * smoothstep(0.94, 1, edge);
+    return [
+      x,
+      (top + bottom) / 2 - ((top - bottom) / 2) * signedPow(Math.cos(a), 0.72) * roundEnd,
+      z - depth * signedPow(Math.sin(a), 0.72) * roundEnd,
+    ];
   });
 }
 
+// Moulded side pods: flat decal faces, rounded corners, tapered leading edge.
 function sidepod(side: number) {
-  return sweep(64, 28, (u, a) => {
-    const z = -0.56 + u * 0.91;
-    const taper = Math.pow(Math.sin(Math.PI * u), 0.45);
-    const w = 0.016 + 0.053 * taper;
-    const h = 0.022 + 0.093 * taper;
+  return sweep(84, 40, (u, a) => {
+    const z = -0.52 + u * 0.77;
+    const taper = 0.3 + 0.7 * Math.min(smoothstep(0, 0.09, u), 1 - 0.78 * smoothstep(0.8, 1, u));
+    const top = 0.282 - 0.027 * smoothstep(0.72, 1, u),
+      bottom = 0.069;
+    const cx = side * (0.583 - 0.018 * smoothstep(0.75, 1, u));
     return [
-      side * (0.599 + 0.014 * Math.sin(u * Math.PI)) + w * Math.sin(a),
-      0.214 - h * Math.cos(a),
+      cx + 0.089 * taper * signedPow(Math.sin(a), 0.38),
+      (top + bottom) / 2 - ((top - bottom) / 2) * taper * signedPow(Math.cos(a), 0.36),
       z,
     ];
   });
 }
 
-/** Extruded outline with an actual through-hole, bent onto a rising fairing.
- * All triangles are subdivided before bending so the long surface stays smooth. */
+// Closed, gently domed shell: the newer Sketchfab reference has a solid fairing.
 function nassauPanel() {
-  const s = new T.Shape();
-  s.moveTo(0, 0);
-  s.bezierCurveTo(-0.12, 0, -0.19, 0.1, -0.184, 0.24);
-  s.bezierCurveTo(-0.18, 0.39, -0.135, 0.57, -0.124, 0.75);
-  s.bezierCurveTo(-0.124, 0.84, -0.09, 0.87, 0, 0.87);
-  s.bezierCurveTo(0.09, 0.87, 0.124, 0.84, 0.124, 0.75);
-  s.bezierCurveTo(0.135, 0.57, 0.18, 0.39, 0.184, 0.24);
-  s.bezierCurveTo(0.19, 0.1, 0.12, 0, 0, 0);
-  const hole = new T.Path();
-  hole.absellipse(0, 0.38, 0.079, 0.106, 0, Math.PI * 2, true);
-  s.holes.push(hole);
-  const handle = new T.Path();
-  handle.absellipse(0, 0.796, 0.066, 0.014, 0, Math.PI * 2, true);
-  s.holes.push(handle);
-  const original = new T.ExtrudeGeometry(s, {
-    depth: 0.013,
-    bevelEnabled: true,
-    bevelThickness: 0.004,
-    bevelSize: 0.004,
-    bevelSegments: 2,
-    steps: 1,
-    curveSegments: 32,
+  const profile = new T.CatmullRomCurve3([
+    new T.Vector3(0.09, 0.244, 0.872),
+    new T.Vector3(0.179, 0.27, 0.822),
+    new T.Vector3(0.186, 0.343, 0.704),
+    new T.Vector3(0.161, 0.45, 0.502),
+    new T.Vector3(0.133, 0.554, 0.25),
+    new T.Vector3(0.138, 0.605, 0.053),
+    new T.Vector3(0.123, 0.59, -0.047),
+  ]);
+  const g = sweep(100, 40, (u, a) => {
+    const p = profile.getPoint(u),
+      c = Math.cos(a);
+    const depth = 0.012 + 0.047 * Math.sin(Math.PI * u) ** 0.6;
+    const y = p.y - depth - depth * signedPow(c, 0.65);
+    return [-p.x * signedPow(Math.sin(a), 0.83), y, p.z];
   });
-  const pos = original.getAttribute('position');
-  const points: number[] = [],
-    uvs: number[] = [];
-  const project = (x: number, t: number, depth: number): V3 => [
-    x,
-    0.234 +
-      0.42 * (t / 0.87) +
-      0.045 * Math.sin((t / 0.87) * Math.PI) +
-      0.033 * (1 - Math.pow(x / 0.2, 2)) +
-      depth,
-    0.838 - t,
-  ];
-  const add = (p: T.Vector3) => {
-    points.push(...project(p.x, p.y, p.z));
-    // Planar template: left/right in U, nose at V=0, steering end at V=1.
-    uvs.push((p.x + 0.2) / 0.4, p.y / 0.87);
-  };
-  function subdiv(a: T.Vector3, b: T.Vector3, c: T.Vector3, depth: number) {
-    if (!depth) {
-      add(a);
-      add(b);
-      add(c);
-      return;
-    }
-    const ab = a.clone().add(b).multiplyScalar(0.5),
-      bc = b.clone().add(c).multiplyScalar(0.5),
-      ca = c.clone().add(a).multiplyScalar(0.5);
-    subdiv(a, ab, ca, depth - 1);
-    subdiv(ab, b, bc, depth - 1);
-    subdiv(ca, bc, c, depth - 1);
-    subdiv(ab, bc, ca, depth - 1);
+  // Planar template across and along the fairing, independent of its thickness.
+  const pos = g.getAttribute('position'),
+    uv = g.getAttribute('uv');
+  for (let i = 0; i < pos.count; i++)
+    uv.setXY(i, (pos.getX(i) + 0.2) / 0.4, (0.872 - pos.getZ(i)) / 0.919);
+  uv.needsUpdate = true;
+  return g;
+}
+
+function rearBumper() {
+  const s = new T.Shape();
+  s.moveTo(-0.66, 0.125);
+  s.lineTo(-0.66, 0.245);
+  s.quadraticCurveTo(-0.66, 0.278, -0.62, 0.278);
+  s.lineTo(-0.23, 0.248);
+  s.quadraticCurveTo(-0.2, 0.246, -0.18, 0.274);
+  s.lineTo(0.18, 0.274);
+  s.quadraticCurveTo(0.2, 0.246, 0.23, 0.248);
+  s.lineTo(0.62, 0.278);
+  s.quadraticCurveTo(0.66, 0.278, 0.66, 0.245);
+  s.lineTo(0.66, 0.125);
+  s.quadraticCurveTo(0.66, 0.095, 0.63, 0.095);
+  s.lineTo(0.22, 0.122);
+  s.quadraticCurveTo(0.19, 0.125, 0.17, 0.106);
+  s.lineTo(-0.17, 0.106);
+  s.quadraticCurveTo(-0.19, 0.125, -0.22, 0.122);
+  s.lineTo(-0.63, 0.095);
+  s.quadraticCurveTo(-0.66, 0.095, -0.66, 0.125);
+  for (const x of [-0.55, -0.4, -0.27, 0.27, 0.4, 0.55]) {
+    const h = new T.Path();
+    h.absellipse(x, 0.184, 0.045, 0.034, 0, Math.PI * 2, true);
+    s.holes.push(h);
   }
-  for (let i = 0; i < pos.count; i += 3)
-    subdiv(
-      new T.Vector3().fromBufferAttribute(pos, i),
-      new T.Vector3().fromBufferAttribute(pos, i + 1),
-      new T.Vector3().fromBufferAttribute(pos, i + 2),
-      2,
-    );
-  original.dispose();
-  const g = new T.BufferGeometry();
-  g.setAttribute('position', new T.Float32BufferAttribute(points, 3));
-  g.setAttribute('uv', new T.Float32BufferAttribute(uvs, 2));
-  const smooth = mergeVertices(g, 0.00001);
-  g.dispose();
-  smooth.computeVertexNormals();
-  return smooth;
+  const g = new T.ExtrudeGeometry(s, {
+    depth: 0.042,
+    bevelEnabled: true,
+    bevelThickness: 0.008,
+    bevelSize: 0.008,
+    bevelSegments: 3,
+    curveSegments: 16,
+  });
+  const p = g.getAttribute('position');
+  for (let i = 0; i < p.count; i++)
+    p.setZ(i, -0.865 + p.getZ(i) + 0.045 * Math.pow(Math.abs(p.getX(i)) / 0.66, 2));
+  const uv = g.getAttribute('uv');
+  for (let i = 0; i < p.count; i++)
+    uv.setXY(i, (p.getX(i) + 0.68) / 1.36, (p.getY(i) - 0.08) / 0.21);
+  g.computeVertexNormals();
+  return g;
 }
 
 export function createKart(): KartModel {
@@ -167,17 +175,19 @@ export function createKart(): KartModel {
   root.name = 'Kartwerkz_BlueBody_RedChassis';
   root.userData = {
     units: 'metres',
-    reference: 'User-supplied photos; approximate geometry',
+    reference:
+      'Visual approximation from photos and public X30 model previews; not the uploaded ZIP',
     forward: '+Z',
+    revision: 2,
   };
   const standard = (color: string, metalness = 0, roughness = 0.5) =>
     new T.MeshStandardMaterial({ color, metalness, roughness });
-  const red = standard('#cc142b', 0.45, 0.28),
-    alloy = standard('#b6bcc2', 0.82, 0.27);
+  const red = standard('#b40921', 0.38, 0.29),
+    alloy = standard('#a0a7ad', 0.85, 0.27);
   const dark = standard('#16191c', 0.25, 0.38),
     rubber = standard('#17181a', 0.0, 0.84);
-  const gold = standard('#998155', 0.73, 0.32),
-    seatMat = standard('#bfc4c5', 0.35, 0.35);
+  const gold = standard('#555354', 0.7, 0.3),
+    seatMat = standard('#202326', 0.16, 0.45);
   seatMat.side = T.DoubleSide;
   const mesh = (name: string, g: T.BufferGeometry, mat: T.Material, parent: T.Object3D = root) => {
     const m = new T.Mesh(g, mat);
@@ -222,7 +232,7 @@ export function createKart(): KartModel {
     return m;
   }
   function box(name: string, size: V3, position: V3, mat: T.Material, parent: T.Object3D = root) {
-    const m = mesh(name, new T.BoxGeometry(...size), mat, parent);
+    const m = mesh(name, new RoundedBoxGeometry(...size, 2, Math.min(...size) * 0.15), mat, parent);
     m.position.set(...position);
     return m;
   }
@@ -245,18 +255,7 @@ export function createKart(): KartModel {
   panel('nassau-panel', nassauPanel());
   panel('sidepod-left', sidepod(-1));
   panel('sidepod-right', sidepod(1));
-  const rear = panel(
-    'rear-bumper',
-    sweep(64, 20, (u, a) => {
-      const x = (u * 2 - 1) * 0.65;
-      return [
-        x,
-        0.22 - (0.036 + 0.012 * Math.cos(x * 5)) * Math.cos(a),
-        -0.88 - 0.025 * Math.sin(a) + 0.034 * Math.pow(Math.abs(x) / 0.65, 4),
-      ];
-    }),
-    '#22262a',
-  );
+  const rear = panel('rear-bumper', rearBumper(), '#22262a');
   rear.userData.baseColor = '#22262a';
   // Chassis rails and front yoke: visible through the space between the plastics.
   for (const side of [-1, 1]) {
@@ -310,7 +309,7 @@ export function createKart(): KartModel {
     rod('seat-stay-' + side, [side * 0.32, 0.14, -0.52], [side * 0.16, 0.34, -0.39], 0.011, alloy);
     rod(
       'rear-bumper-stay-' + side,
-      [side * 0.27, 0.16, -0.65],
+      [side * 0.27, 0.16, -0.615],
       [side * 0.38, 0.22, -0.87],
       0.012,
       dark,
@@ -318,25 +317,27 @@ export function createKart(): KartModel {
   }
   rod('chassis-front-cross', [-0.34, 0.15, 0.49], [0.34, 0.15, 0.49], 0.016, red);
   rod('chassis-rear-cross', [-0.32, 0.135, -0.57], [0.32, 0.135, -0.57], 0.016, red);
-  box('floor-tray', [0.54, 0.007, 0.78], [0, 0.125, 0.08], standard('#60676b', 0.6, 0.45));
-  // Fuel tank: translucent cream moulding, centrally under the steering column.
-  const tank = mesh(
-    'fuel-tank',
-    new T.SphereGeometry(1, 24, 16),
-    new T.MeshPhysicalMaterial({
-      color: '#e4dfc5',
-      roughness: 0.38,
-      transparent: true,
-      opacity: 0.85,
-    }),
-  );
-  tank.scale.set(0.104, 0.135, 0.14);
-  tank.position.set(0, 0.255, 0.08);
-  rod('fuel-cap', [0, 0.365, 0.07], [0, 0.389, 0.07], 0.027, dark);
+  box('floor-tray', [0.52, 0.008, 0.72], [0, 0.112, 0.13], standard('#2a2e32', 0.25, 0.58));
+  // Moulded fuel tank and ridged cap below the steering column.
+  const tankMat = standard('#dbdfd5', 0.02, 0.43);
+  const tank = mesh('fuel-tank', new RoundedBoxGeometry(0.22, 0.255, 0.25, 4, 0.027), tankMat);
+  tank.position.set(0, 0.248, 0.03);
+  tank.rotation.x = -0.06;
+  rod('fuel-cap', [0, 0.368, 0.04], [0, 0.397, 0.04], 0.028, dark);
+  for (let i = 0; i < 18; i++) {
+    const a = (i * Math.PI) / 9;
+    rod(
+      'fuel-cap-rib',
+      [0.028 * Math.sin(a), 0.373, 0.04 + 0.028 * Math.cos(a)],
+      [0.028 * Math.sin(a), 0.39, 0.04 + 0.028 * Math.cos(a)],
+      0.0017,
+      dark,
+    );
+  }
   // Rear axle, hubs and bearings.
-  rod('rear-axle', [-0.64, 0.139, -0.65], [0.64, 0.139, -0.65], 0.022, alloy);
+  rod('rear-axle', [-0.64, 0.145, -0.615], [0.64, 0.145, -0.615], 0.022, alloy);
   for (const x of [-0.28, 0.28]) {
-    box('bearing-carrier', [0.08, 0.08, 0.072], [x, 0.141, -0.65], dark);
+    box('bearing-carrier', [0.08, 0.08, 0.072], [x, 0.141, -0.615], dark);
   }
   // Tyres: lathed profile gives flat tread and rounded shoulders, not torus tyres.
   function wheel(x: number, z: number, width: number, radius: number) {
@@ -368,17 +369,22 @@ export function createKart(): KartModel {
       rubber,
       assembly,
     );
-    rod('wheel-barrel', [0, -w + 0.01, 0], [0, w - 0.01, 0], 0.077, gold, assembly);
+    mesh(
+      'wheel-barrel',
+      new T.CylinderGeometry(0.071, 0.071, width - 0.025, 40, 1, true),
+      gold,
+      assembly,
+    );
     for (const sign of [-1, 1]) {
-      const rim = mesh('rim-lip', new T.TorusGeometry(0.077, 0.005, 8, 40), alloy, assembly);
+      const rim = mesh('rim-lip', new T.TorusGeometry(0.073, 0.004, 8, 40), alloy, assembly);
       rim.rotation.x = Math.PI / 2;
       rim.position.y = sign * (w - 0.009);
       for (let j = 0; j < 6; j++) {
         const a = (j * Math.PI) / 3;
         rod(
           'rim-spoke',
-          [0.014 * Math.sin(a), sign * (w - 0.01), 0.014 * Math.cos(a)],
-          [0.067 * Math.sin(a), sign * (w - 0.013), 0.067 * Math.cos(a)],
+          [0.014 * Math.sin(a), sign * (w - 0.03), 0.014 * Math.cos(a)],
+          [0.06 * Math.sin(a), sign * (w - 0.025), 0.06 * Math.cos(a)],
           0.008,
           gold,
           assembly,
@@ -387,50 +393,51 @@ export function createKart(): KartModel {
       rod('hub', [0, sign * (w - 0.02), 0], [0, sign * (w + 0.012), 0], 0.025, alloy, assembly);
     }
   }
-  wheel(-0.565, 0.455, 0.133, 0.135);
-  wheel(0.565, 0.455, 0.133, 0.135);
-  wheel(-0.56, -0.65, 0.205, 0.139);
-  wheel(0.56, -0.65, 0.205, 0.139);
+  wheel(-0.55, 0.43, 0.139, 0.143);
+  wheel(0.55, 0.43, 0.139, 0.143);
+  wheel(-0.56, -0.615, 0.215, 0.145);
+  wheel(0.56, -0.615, 0.215, 0.145);
   // Steering tie rods, uprights and an inclined steering wheel.
   for (const side of [-1, 1]) {
     rod('kingpin', [side * 0.445, 0.105, 0.455], [side * 0.445, 0.22, 0.455], 0.013, alloy);
     rod('tie-rod', [side * 0.07, 0.18, 0.3], [side * 0.448, 0.18, 0.403], 0.005, alloy);
     box('pedal', [0.065, 0.016, 0.085], [side * 0.155, 0.16, 0.46], alloy);
   }
-  rod('steering-column', [0, 0.17, 0.36], [0, 0.55, -0.12], 0.01, alloy);
+  rod('steering-column', [0, 0.17, 0.36], [0, 0.52, -0.115], 0.0105, alloy);
   const steer = new T.Group();
   steer.name = 'steering-wheel';
-  steer.position.set(0, 0.545, -0.1);
+  steer.position.set(0, 0.52, -0.115);
   steer.rotation.x = -0.64;
   root.add(steer);
-  const rim = mesh('steering-grip', new T.TorusGeometry(0.132, 0.014, 12, 48), dark, steer);
+  const rim = mesh('steering-grip', new T.TorusGeometry(0.153, 0.013, 12, 64), dark, steer);
   rim.scale.y = 0.87;
   for (const a of [Math.PI / 6, (Math.PI * 5) / 6, Math.PI * 1.5])
     rod(
       'steering-spoke',
       [0, 0, 0],
-      [Math.cos(a) * 0.12, Math.sin(a) * 0.105, 0],
+      [Math.cos(a) * 0.139, Math.sin(a) * 0.122, 0],
       0.012,
       alloy,
       steer,
     );
   box('steering-hub', [0.061, 0.047, 0.022], [0, 0, 0.005], dark, steer);
-  box('dash', [0.069, 0.032, 0.023], [0, 0.097, 0.016], dark, steer);
+  box('dash', [0.084, 0.046, 0.025], [0, 0.037, 0.022], dark, steer);
   box(
     'dash-display',
-    [0.052, 0.018, 0.002],
-    [0, 0.097, 0.029],
+    [0.062, 0.029, 0.002],
+    [0, 0.037, 0.036],
     standard('#799691', 0.15, 0.25),
     steer,
   );
   // Open bucket seat: floor, curved sides and tall rear shell.
   const seat = new T.Group();
   seat.name = 'bucket-seat';
-  seat.position.set(-0.03, 0, -0.35);
+  seat.position.set(-0.035, 0, -0.355);
   root.add(seat);
   const sg = new T.BufferGeometry(),
     sp: number[] = [],
-    si: number[] = [];
+    si: number[] = [],
+    suv: number[] = [];
   const rings = 18,
     sides = 64;
   for (let i = 0; i <= rings; i++)
@@ -438,12 +445,13 @@ export function createKart(): KartModel {
       const t = i / rings,
         a = (j / sides) * Math.PI * 2;
       const back = Math.max(0, -Math.cos(a));
-      const height = 0.205 + 0.265 * Math.pow(back, 2);
+      const height = 0.215 + 0.345 * smoothstep(0.05, 0.58, back);
       sp.push(
-        Math.sin(a) * (0.105 + 0.065 * t),
+        Math.sin(a) * (0.116 + 0.077 * t),
         0.145 + t * (height - 0.145),
-        Math.cos(a) * (0.105 + 0.09 * t) - 0.05 * t,
+        Math.cos(a) * (0.135 + 0.11 * t) - 0.065 * t,
       );
+      suv.push(j / sides, i / rings);
     }
   for (let i = 0; i < rings; i++)
     for (let j = 0; j < sides; j++) {
@@ -452,79 +460,170 @@ export function createKart(): KartModel {
       si.push(a, b, a + 1, b, b + 1, a + 1);
     }
   sg.setAttribute('position', new T.Float32BufferAttribute(sp, 3));
+  sg.setAttribute('uv', new T.Float32BufferAttribute(suv, 2));
   sg.setIndex(si);
   sg.computeVertexNormals();
   mesh('seat-shell', sg, seatMat, seat);
   const base = mesh('seat-base', new T.SphereGeometry(1, 32, 12), seatMat, seat);
   base.position.y = 0.145;
-  base.scale.set(0.11, 0.013, 0.112);
+  base.scale.set(0.119, 0.013, 0.139);
   const lip: V3[] = [];
   for (let j = 0; j <= 64; j++) {
     const a = (j / 64) * Math.PI * 2;
     lip.push([
-      Math.sin(a) * 0.17,
-      0.205 + 0.265 * Math.pow(Math.max(0, -Math.cos(a)), 2),
-      Math.cos(a) * 0.195 - 0.05,
+      Math.sin(a) * 0.193,
+      0.215 + 0.345 * smoothstep(0.05, 0.58, Math.max(0, -Math.cos(a))),
+      Math.cos(a) * 0.245 - 0.065,
     ]);
   }
   tube('seat-rim', lip, 0.006, seatMat, seat);
-  // Simplified engine/drivetrain, placed on the right of the seat.
-  box('engine-crankcase', [0.17, 0.13, 0.21], [0.34, 0.24, -0.48], alloy);
-  box('cylinder-block', [0.115, 0.14, 0.13], [0.34, 0.36, -0.48], dark);
-  for (let i = 0; i < 8; i++)
-    box('cooling-fin', [0.143, 0.007, 0.153], [0.34, 0.303 + i * 0.016, -0.48], alloy);
-  rod('spark-plug', [0.34, 0.43, -0.48], [0.34, 0.478, -0.48], 0.012, seatMat);
-  const airbox = mesh('airbox', new T.SphereGeometry(1, 24, 16), dark);
-  airbox.position.set(0.37, 0.265, -0.2);
-  airbox.scale.set(0.093, 0.09, 0.137);
-  tube(
-    'exhaust-header',
-    [
-      [0.39, 0.38, -0.51],
-      [0.46, 0.32, -0.56],
-      [0.43, 0.27, -0.72],
-      [0.23, 0.3, -0.77],
-    ],
-    0.025,
-    standard('#57504a', 0.75, 0.42),
+  // Water-cooled two-stroke silhouette: crankcase, head, intake, expansion chamber.
+  const engine = new T.Group();
+  engine.name = 'X30-style-engine';
+  root.add(engine);
+  rod('crankcase', [0.27, 0.245, -0.47], [0.41, 0.245, -0.47], 0.079, alloy, engine);
+  rod('clutch-cover', [0.41, 0.245, -0.47], [0.443, 0.245, -0.47], 0.078, dark, engine);
+  box('engine-block', [0.125, 0.105, 0.14], [0.335, 0.34, -0.46], alloy, engine);
+  const head = mesh(
+    'cylinder-head',
+    new RoundedBoxGeometry(0.137, 0.1, 0.145, 4, 0.035),
+    alloy,
+    engine,
   );
-  rod('silencer', [0.2, 0.3, -0.77], [-0.05, 0.3, -0.77], 0.038, dark);
-  rod('brake-disc', [-0.22, 0.139, -0.65], [-0.21, 0.139, -0.65], 0.083, alloy);
-  box('brake-caliper', [0.054, 0.065, 0.07], [-0.214, 0.202, -0.655], dark);
-  rod('drive-sprocket', [0.385, 0.139, -0.65], [0.397, 0.139, -0.65], 0.091, gold);
+  head.position.set(0.335, 0.427, -0.46);
+  for (let i = 0; i < 7; i++)
+    box('head-cooling-rib', [0.141, 0.004, 0.15], [0.335, 0.39 + i * 0.012, -0.46], alloy, engine);
+  for (const x of [0.292, 0.378])
+    for (const z of [-0.508, -0.412])
+      rod('head-bolt', [x, 0.465, z], [x, 0.48, z], 0.007, dark, engine);
+  rod('spark-plug', [0.335, 0.477, -0.46], [0.335, 0.512, -0.46], 0.01, tankMat, engine);
   tube(
-    'chain',
+    'ignition-lead',
     [
-      [0.398, 0.222, -0.65],
-      [0.398, 0.247, -0.48],
-      [0.398, 0.188, -0.43],
-      [0.398, 0.064, -0.63],
-      [0.398, 0.075, -0.69],
-      [0.398, 0.222, -0.65],
+      [0.335, 0.51, -0.46],
+      [0.39, 0.52, -0.45],
+      [0.4, 0.36, -0.53],
     ],
     0.004,
     dark,
   );
-  // Black recessed duct behind the central bodywork opening; the hole stays open.
+  rod('carburettor', [0.335, 0.278, -0.39], [0.335, 0.268, -0.286], 0.025, alloy);
+  const airbox = mesh('airbox', new RoundedBoxGeometry(0.135, 0.094, 0.18, 4, 0.035), dark);
+  airbox.position.set(0.335, 0.231, -0.216);
+  for (const x of [0.312, 0.358])
+    rod('intake-trumpet', [x, 0.269, -0.232], [x, 0.29, -0.176], 0.014, dark);
+  const pipeMat = standard('#393330', 0.7, 0.38);
   tube(
-    'nassau-support',
+    'exhaust-header',
     [
-      [-0.11, 0.2, 0.33],
-      [-0.11, 0.43, 0.1],
-      [-0.09, 0.6, -0.01],
+      [0.3, 0.355, -0.52],
+      [0.25, 0.32, -0.61],
+      [0.18, 0.27, -0.67],
+      [0.07, 0.26, -0.69],
     ],
-    0.007,
+    0.02,
+    pipeMat,
+  );
+  const exp = mesh('expansion-chamber', new T.CylinderGeometry(0.035, 0.066, 0.27, 32), pipeMat);
+  exp.rotation.z = Math.PI / 2;
+  exp.position.set(-0.07, 0.26, -0.69);
+  rod('exhaust-silencer', [-0.21, 0.26, -0.69], [-0.37, 0.26, -0.69], 0.042, dark);
+  rod('exhaust-outlet', [-0.37, 0.26, -0.69], [-0.409, 0.265, -0.69], 0.014, alloy);
+  // Tall radiator on the opposite side of the seat, with a visible fin matrix.
+  const rad = new T.Group();
+  rad.name = 'radiator';
+  rad.position.set(-0.335, 0.355, -0.34);
+  rad.rotation.x = -0.18;
+  rad.rotation.z = -0.08;
+  root.add(rad);
+  box('radiator-core', [0.192, 0.346, 0.031], [0, 0, 0], standard('#545e62', 0.7, 0.48), rad);
+  for (let i = 0; i <= 23; i++)
+    box(
+      'radiator-vertical-fin',
+      [0.003, 0.331, 0.007],
+      [-0.087 + i * 0.0076, 0, 0.019],
+      alloy,
+      rad,
+    );
+  for (let i = 0; i <= 36; i++)
+    box(
+      'radiator-horizontal-fin',
+      [0.178, 0.0015, 0.006],
+      [0, -0.158 + i * 0.0088, 0.024],
+      dark,
+      rad,
+    );
+  for (const x of [-0.104, 0.104])
+    box('radiator-side-tank', [0.018, 0.372, 0.048], [x, 0, 0], alloy, rad);
+  for (const y of [-0.182, 0.182])
+    box('radiator-header', [0.22, 0.027, 0.052], [0, y, 0], alloy, rad);
+  rod('radiator-cap', [0.04, 0.192, 0], [0.04, 0.214, 0], 0.019, dark, rad);
+  for (const z of [-0.45, -0.27])
+    rod('radiator-bracket', [-0.31, 0.15, z], [-0.335, 0.29, z], 0.008, alloy);
+  const hoseMat = standard('#164355', 0.05, 0.48);
+  tube(
+    'coolant-hose-upper',
+    [
+      [-0.29, 0.5, -0.32],
+      [-0.28, 0.48, -0.52],
+      [-0.24, 0.35, -0.7],
+      [0.12, 0.32, -0.72],
+      [0.29, 0.35, -0.51],
+    ],
+    0.011,
+    hoseMat,
+  );
+  tube(
+    'coolant-hose-lower',
+    [
+      [-0.37, 0.18, -0.3],
+      [-0.29, 0.145, -0.24],
+      [0.23, 0.16, -0.28],
+      [0.34, 0.25, -0.44],
+    ],
+    0.01,
+    hoseMat,
+  );
+  rod('brake-disc', [-0.22, 0.145, -0.615], [-0.211, 0.145, -0.615], 0.081, alloy);
+  box(
+    'brake-caliper',
+    [0.054, 0.068, 0.07],
+    [-0.216, 0.201, -0.618],
+    standard('#3b3d40', 0.6, 0.33),
+  );
+  rod('drive-sprocket', [0.385, 0.145, -0.615], [0.395, 0.145, -0.615], 0.083, gold);
+  tube(
+    'chain',
+    [
+      [0.401, 0.226, -0.615],
+      [0.401, 0.291, -0.47],
+      [0.401, 0.207, -0.43],
+      [0.401, 0.064, -0.595],
+      [0.401, 0.07, -0.66],
+      [0.401, 0.226, -0.615],
+    ],
+    0.004,
     dark,
   );
   tube(
     'nassau-support',
     [
-      [0.11, 0.2, 0.33],
-      [0.11, 0.43, 0.1],
-      [0.09, 0.6, -0.01],
+      [-0.1, 0.18, 0.27],
+      [-0.1, 0.36, 0.11],
+      [-0.08, 0.54, -0.01],
     ],
     0.007,
-    dark,
+    alloy,
+  );
+  tube(
+    'nassau-support',
+    [
+      [0.1, 0.18, 0.27],
+      [0.1, 0.36, 0.11],
+      [0.08, 0.54, -0.01],
+    ],
+    0.007,
+    alloy,
   );
   root.updateMatrixWorld(true);
   return {

@@ -56,20 +56,14 @@ function applyFinish(mat: T.MeshPhysicalMaterial, finish: Finish) {
       mat.iridescence = 0;
       break;
     case 'holographic':
-      // Three's iridescence model approximates a colour-shifting clearcoat —
-      // the closest built-in stand-in for a holographic vinyl finish. See
-      // docs/configurator.md: this is a preview approximation, not accurate
-      // under real studio/manufacturing lighting.
       mat.metalness = 0.6;
-      mat.roughness = 0.15;
+      mat.roughness = 0.2;
       mat.clearcoat = 1;
       mat.clearcoatRoughness = 0.1;
       mat.iridescence = 1;
       mat.iridescenceIOR = 1.3;
-      mat.iridescenceThicknessRange = [100, 400];
       break;
   }
-  mat.needsUpdate = true;
 }
 
 /** Preview textures only. These UVs are NOT supplier cutting/print templates. */
@@ -159,6 +153,7 @@ export function applyAppearance(model: KartModel, appearance: KartAppearance): (
     mat.color.set('#ffffff');
     mat.map = texture;
     applyFinish(mat, appearance.finish);
+    mat.needsUpdate = true;
   }
   return () => {
     for (const name of PANEL_NAMES)
