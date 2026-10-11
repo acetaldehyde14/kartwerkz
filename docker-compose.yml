@@ -79,7 +79,10 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      # Override .env's host-facing (localhost) DATABASE_URL with the
+      # Compose-internal service hostname — containers can't reach each
+      # other via "localhost". REDIS_URL/S3_ENDPOINT get the same treatment.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-kartwerkz}:${POSTGRES_PASSWORD:-change-me-dev-only}@postgres:5432/${POSTGRES_DB:-kartwerkz}?schema=public
       REDIS_URL: redis://redis:6379
       S3_ENDPOINT: http://minio:9000
     ports:
@@ -104,7 +107,10 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      # Override .env's host-facing (localhost) DATABASE_URL with the
+      # Compose-internal service hostname — containers can't reach each
+      # other via "localhost". REDIS_URL/S3_ENDPOINT get the same treatment.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-kartwerkz}:${POSTGRES_PASSWORD:-change-me-dev-only}@postgres:5432/${POSTGRES_DB:-kartwerkz}?schema=public
       REDIS_URL: redis://redis:6379
       S3_ENDPOINT: http://minio:9000
     volumes:
